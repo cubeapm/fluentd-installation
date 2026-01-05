@@ -9,13 +9,13 @@
 #                                                                              #
 ################################################################################
 
-set -e
+# Remove 'set -e' to allow script to continue on errors
+set +e
 
 # ============================================================================
 #                              COLOR DEFINITIONS
 # ============================================================================
 
-# Standard Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -24,34 +24,23 @@ MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 GRAY='\033[0;90m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Background Colors
-BG_BLUE='\033[44m'
-BG_GREEN='\033[42m'
-BG_RED='\033[41m'
-
-# Text Styles
 BOLD='\033[1m'
 UNDERLINE='\033[4m'
-DIM='\033[2m'
 
-# Emojis
 SUCCESS='✅'
 ERROR='❌'
 WARNING='⚠️ '
 INFO='ℹ️ '
-SPINNER='⟳'
 ARROW='→'
 ROCKET='🚀'
-GEAR='⚙️ '
 HEART='❤️ '
 
 # ============================================================================
 #                           UTILITY FUNCTIONS
 # ============================================================================
 
-# Print header with style
 print_header() {
     clear
     echo -e "${CYAN}${BOLD}"
@@ -65,47 +54,26 @@ print_header() {
     echo -e "${NC}\n"
 }
 
-# Print success message with box
 print_success() {
     echo -e "${GREEN}${BOLD}${SUCCESS}  $1${NC}"
 }
 
-# Print error message with box
 print_error() {
     echo -e "${RED}${BOLD}${ERROR}  $1${NC}"
 }
 
-# Print warning message
 print_warning() {
     echo -e "${YELLOW}${BOLD}${WARNING} $1${NC}"
 }
 
-# Print info message
 print_info() {
     echo -e "${CYAN}${BOLD}${INFO} $1${NC}"
 }
 
-# Print section divider
 print_divider() {
     echo -e "${GRAY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
-# Animated spinner
-spinner() {
-    local pid=$1
-    local delay=0.1
-    local spinstr='|/-\'
-    while kill -0 $pid 2>/dev/null; do
-        local temp=${spinstr#?}
-        printf " [${CYAN}%c${NC}]  " "$spinstr"
-        local spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b\b"
-    done
-    printf "    \b\b\b\b"
-}
-
-# Print box around text
 print_box() {
     local text="$1"
     local width=${#text}
@@ -114,61 +82,46 @@ print_box() {
     echo -e "${BLUE}└$(printf '─%.0s' {1..$((width+2))})┘${NC}"
 }
 
-# Progress bar
-show_progress() {
-    local current=$1
-    local total=$2
-    local task="$3"
-    
-    local percent=$((current * 100 / total))
-    local bar_length=40
-    local filled=$((percent * bar_length / 100))
-    
-    printf "\r${CYAN}${task}${NC} ["
-    printf "%${filled}s" | tr ' ' '█'
-    printf "%$((bar_length - filled))s" | tr ' ' '░'
-    printf "] ${percent}%% "
-}
-
 # ============================================================================
 #                            DETECTION FUNCTIONS
 # ============================================================================
 
 detect_os() {
-    print_info "Detecting operating system..."
-    sleep 1
-    
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
         if [ -f /etc/os-release ]; then
             . /etc/os-release
             OS=$ID
-            VERSION=$VERSION_ID
+            VERSION_ID=$VERSION_ID
             OS_NAME=$PRETTY_NAME
+            VERSION_CODENAME=${VERSION_CODENAME:-focal}
         elif [ -f /etc/lsb-release ]; then
             . /etc/lsb-release
             OS=$(echo $DISTRIB_ID | tr '[:upper:]' '[:lower:]')
-            VERSION=$DISTRIB_RELEASE
+            VERSION_ID=$DISTRIB_RELEASE
             OS_NAME="$DISTRIB_ID $DISTRIB_RELEASE"
+            VERSION_CODENAME=$(lsb_release -cs 2>/dev/null || echo "focal")
         else
             OS="linux"
-            VERSION="unknown"
+            VERSION_ID="unknown"
             OS_NAME="Linux (Unknown)"
+            VERSION_CODENAME="focal"
         fi
     elif [[ "$OSTYPE" == "darwin"* ]]; then
         OS="macos"
-        VERSION=$(sw_vers -productVersion)
+        VERSION_ID=$(sw_vers -productVersion)
         OS_NAME="macOS $(sw_vers -productVersion)"
+        VERSION_CODENAME=""
     elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]]; then
         OS="windows"
-        VERSION="unknown"
+        VERSION_ID="unknown"
         OS_NAME="Windows"
+        VERSION_CODENAME=""
     else
         OS="unknown"
-        VERSION="unknown"
+        VERSION_ID="unknown"
         OS_NAME="Unknown OS"
+        VERSION_CODENAME=""
     fi
-
-    echo "$OS|$VERSION|$OS_NAME"
 }
 
 # ============================================================================
@@ -181,43 +134,63 @@ install_ubuntu_debian() {
     print_divider
     echo ""
     
-    show_progress 0 5 "Setting up repository"
-    sleep 1
-    curl -fsSL https://packages.treasuredata.com/GPG-KEY-td-agent 2>/dev/null | \
-        sudo gpg --dearmor -o /usr/share/keyrings/fluentd-keyring.gpg 2>/dev/null &
-    spinner $!
-    show_progress 1 5 "Setting up repository"
-    echo ""
+    print_info "Step 1/5: Setting up GPG key..."
     
-    show_progress 2 5 "Adding Fluentd sources"
-    sleep 1
-    echo "deb [signed-by=/usr/share/keyrings/fluentd-keyring.gpg] https://packages.treasuredata.com/debian/bullseye/ bullseye contrib" | \
-        sudo tee /etc/apt/sources.list.d/fluentd.list > /dev/null 2>&1 &
-    spinner $!
-    show_progress 2 5 "Adding Fluentd sources"
-    echo ""
+    # Download and setup GPG key
+    if curl -fsSL https://packages.treasuredata.com/GPG-KEY-td-agent -o /tmp/fluentd-key.gpg 2>/dev/null; then
+        sudo gpg --dearmor -o /usr/share/keyrings/fluentd-keyring.gpg /tmp/fluentd-key.gpg 2>/dev/null
+        rm -f /tmp/fluentd-key.gpg
+        print_success "GPG key setup completed"
+    else
+        print_warning "Could not download GPG key, continuing without key verification"
+    fi
     
-    show_progress 3 5 "Updating package manager"
-    sleep 2
-    sudo apt-get update > /dev/null 2>&1 &
-    spinner $!
-    show_progress 3 5 "Updating package manager"
     echo ""
+    print_info "Step 2/5: Adding Fluentd repository..."
     
-    show_progress 4 5 "Installing Fluentd package"
-    sleep 2
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y td-agent > /dev/null 2>&1 &
-    spinner $!
-    show_progress 4 5 "Installing Fluentd package"
-    echo ""
+    # Get Ubuntu/Debian codename
+    CODENAME=$(lsb_release -cs 2>/dev/null || echo "focal")
     
-    show_progress 5 5 "Finalizing installation"
-    sleep 1
-    show_progress 5 5 "Finalizing installation"
-    echo ""
-    echo ""
+    # For Ubuntu 22.04 specifically
+    if [ "$CODENAME" = "jammy" ]; then
+        CODENAME="jammy"
+    elif [ "$CODENAME" = "focal" ]; then
+        CODENAME="focal"
+    elif [ "$CODENAME" = "bionic" ]; then
+        CODENAME="bionic"
+    fi
     
-    print_success "Fluentd installed successfully on Ubuntu/Debian"
+    # Add repository
+    if [ -f /usr/share/keyrings/fluentd-keyring.gpg ]; then
+        echo "deb [signed-by=/usr/share/keyrings/fluentd-keyring.gpg] https://packages.treasuredata.com/debian/${CODENAME}/ ${CODENAME} contrib" | \
+            sudo tee /etc/apt/sources.list.d/fluentd.list > /dev/null 2>&1
+    else
+        echo "deb https://packages.treasuredata.com/debian/${CODENAME}/ ${CODENAME} contrib" | \
+            sudo tee /etc/apt/sources.list.d/fluentd.list > /dev/null 2>&1
+    fi
+    
+    print_success "Repository added"
+    
+    echo ""
+    print_info "Step 3/5: Updating package manager..."
+    sudo apt-get update -qq > /dev/null 2>&1
+    print_success "Package manager updated"
+    
+    echo ""
+    print_info "Step 4/5: Installing Fluentd (td-agent)..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y td-agent > /dev/null 2>&1
+    
+    if command -v td-agent &> /dev/null; then
+        print_success "Fluentd installed successfully"
+    else
+        print_error "Failed to install Fluentd"
+        return 1
+    fi
+    
+    echo ""
+    print_info "Step 5/5: Finalizing..."
+    print_success "Installation completed on Ubuntu/Debian"
+    echo ""
 }
 
 install_centos_rhel() {
@@ -226,8 +199,8 @@ install_centos_rhel() {
     print_divider
     echo ""
     
-    show_progress 0 4 "Setting up repository"
-    sleep 1
+    print_info "Step 1/4: Setting up repository..."
+    
     cat << EOF | sudo tee /etc/yum.repos.d/td.repo > /dev/null 2>&1
 [treasuredata]
 name=TreasureData
@@ -235,28 +208,28 @@ baseurl=https://packages.treasuredata.com/redhat/\$releasever/\$basearch
 gpgcheck=1
 gpgkey=https://packages.treasuredata.com/GPG-KEY-td-agent
 EOF
-    show_progress 1 4 "Setting up repository"
-    echo ""
     
-    show_progress 2 4 "Installing Fluentd package"
-    sleep 2
-    sudo yum install -y td-agent > /dev/null 2>&1 &
-    spinner $!
-    show_progress 2 4 "Installing Fluentd package"
-    echo ""
+    print_success "Repository configured"
     
-    show_progress 3 4 "Configuring service"
-    sleep 1
-    show_progress 3 4 "Configuring service"
     echo ""
+    print_info "Step 2/4: Installing Fluentd (td-agent)..."
+    sudo yum install -y td-agent > /dev/null 2>&1
     
-    show_progress 4 4 "Finalizing installation"
-    sleep 1
-    show_progress 4 4 "Finalizing installation"
-    echo ""
-    echo ""
+    if command -v td-agent &> /dev/null; then
+        print_success "Fluentd installed successfully"
+    else
+        print_error "Failed to install Fluentd"
+        return 1
+    fi
     
-    print_success "Fluentd installed successfully on CentOS/RHEL"
+    echo ""
+    print_info "Step 3/4: Configuring service..."
+    print_success "Service configured"
+    
+    echo ""
+    print_info "Step 4/4: Finalizing..."
+    print_success "Installation completed on CentOS/RHEL"
+    echo ""
 }
 
 install_alpine() {
@@ -265,27 +238,25 @@ install_alpine() {
     print_divider
     echo ""
     
-    show_progress 0 3 "Updating package manager"
-    sleep 1
-    sudo apk update > /dev/null 2>&1 &
-    spinner $!
-    show_progress 1 3 "Updating package manager"
-    echo ""
+    print_info "Step 1/3: Updating package manager..."
+    sudo apk update > /dev/null 2>&1
+    print_success "Package manager updated"
     
-    show_progress 2 3 "Installing Fluent Bit (Alpine alternative)"
-    sleep 2
-    sudo apk add --no-cache fluent-bit > /dev/null 2>&1 &
-    spinner $!
-    show_progress 2 3 "Installing Fluent Bit (Alpine alternative)"
     echo ""
+    print_info "Step 2/3: Installing Fluent Bit..."
+    sudo apk add --no-cache fluent-bit > /dev/null 2>&1
     
-    show_progress 3 3 "Finalizing installation"
-    sleep 1
-    show_progress 3 3 "Finalizing installation"
-    echo ""
-    echo ""
+    if command -v fluent-bit &> /dev/null; then
+        print_success "Fluent Bit installed successfully"
+    else
+        print_error "Failed to install Fluent Bit"
+        return 1
+    fi
     
-    print_success "Fluent Bit installed successfully on Alpine Linux"
+    echo ""
+    print_info "Step 3/3: Finalizing..."
+    print_success "Installation completed on Alpine Linux"
+    echo ""
 }
 
 install_macos() {
@@ -295,36 +266,32 @@ install_macos() {
     echo ""
     
     if ! command -v brew &> /dev/null; then
-        print_warning "Homebrew not found. Installing first..."
-        echo ""
-        show_progress 0 2 "Installing Homebrew"
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" > /dev/null 2>&1 &
-        spinner $!
-        show_progress 1 2 "Installing Homebrew"
-        echo ""
+        print_warning "Homebrew not found, installing..."
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" > /dev/null 2>&1
+        print_success "Homebrew installed"
     fi
     
-    show_progress 1 2 "Installing Fluent Bit via Homebrew"
-    sleep 2
-    brew install fluent-bit > /dev/null 2>&1 &
-    spinner $!
-    show_progress 2 2 "Installing Fluent Bit via Homebrew"
     echo ""
-    echo ""
+    print_info "Installing Fluent Bit via Homebrew..."
+    brew install fluent-bit > /dev/null 2>&1
     
-    print_success "Fluent Bit installed successfully on macOS"
+    if command -v fluent-bit &> /dev/null; then
+        print_success "Fluent Bit installed successfully"
+    else
+        print_error "Failed to install Fluent Bit"
+        return 1
+    fi
+    
+    echo ""
 }
 
 install_windows() {
     print_error "Windows detected!"
     echo ""
-    echo -e "${BOLD}Please install Fluentd manually using one of these methods:${NC}"
+    echo -e "${BOLD}Please install Fluentd manually:${NC}"
     echo ""
-    echo -e "${CYAN}${ARROW}${NC} Download MSI installer:"
-    echo "   ${UNDERLINE}https://docs.fluentd.org/installation/install-by-msi${NC}"
-    echo ""
-    echo -e "${CYAN}${ARROW}${NC} Using Chocolatey (if installed):"
-    echo "   ${BOLD}choco install fluentd${NC}"
+    echo -e "${CYAN}${ARROW}${NC} MSI: https://docs.fluentd.org/installation/install-by-msi"
+    echo -e "${CYAN}${ARROW}${NC} Chocolatey: choco install fluentd"
     echo ""
     exit 1
 }
@@ -339,19 +306,21 @@ start_service_linux() {
     print_divider
     echo ""
     
-    show_progress 0 2 "Starting Fluentd service"
-    sleep 1
-    
     if command -v systemctl &> /dev/null; then
-        sudo systemctl start td-agent > /dev/null 2>&1
-        sudo systemctl enable td-agent > /dev/null 2>&1
-        show_progress 2 2 "Starting Fluentd service"
-        echo ""
-        print_success "Fluentd started and enabled on boot"
+        print_info "Starting Fluentd with systemctl..."
+        sudo systemctl start td-agent 2>/dev/null
+        sudo systemctl enable td-agent 2>/dev/null
+        
+        sleep 2
+        
+        if sudo systemctl is-active --quiet td-agent; then
+            print_success "Fluentd started and enabled on boot"
+        else
+            print_warning "Fluentd may not have started, check with: sudo systemctl status td-agent"
+        fi
     elif command -v service &> /dev/null; then
-        sudo service td-agent start > /dev/null 2>&1
-        show_progress 2 2 "Starting Fluentd service"
-        echo ""
+        print_info "Starting Fluentd with service..."
+        sudo service td-agent start 2>/dev/null
         print_success "Fluentd service started"
     else
         print_error "Could not determine service manager"
@@ -367,18 +336,15 @@ start_service_macos() {
     print_divider
     echo ""
     
-    show_progress 0 2 "Starting Fluent Bit service"
-    sleep 1
+    print_info "Starting Fluent Bit..."
+    brew services start fluent-bit > /dev/null 2>&1
     
-    if command -v fluent-bit &> /dev/null; then
-        brew services start fluent-bit > /dev/null 2>&1 &
-        spinner $!
-        show_progress 2 2 "Starting Fluent Bit service"
-        echo ""
-        print_success "Fluent Bit service started"
+    sleep 2
+    
+    if brew services list 2>/dev/null | grep -q "fluent-bit"; then
+        print_success "Fluent Bit started"
     else
-        print_error "Fluent Bit not found"
-        return 1
+        print_warning "Check status with: brew services list"
     fi
     
     echo ""
@@ -394,29 +360,21 @@ check_status_linux() {
     print_divider
     echo ""
     
-    if command -v systemctl &> /dev/null; then
-        # Get status
-        if sudo systemctl is-active --quiet td-agent; then
-            print_success "Fluentd service is RUNNING"
-            echo ""
-            echo -e "${CYAN}Service Details:${NC}"
-            sudo systemctl status td-agent --no-pager | grep -E "Active|Loaded" | sed 's/^/  /'
-        else
-            print_error "Fluentd service is STOPPED"
-            return 1
-        fi
+    if sudo systemctl is-active --quiet td-agent 2>/dev/null; then
+        print_success "Fluentd service is RUNNING ✓"
+    else
+        print_warning "Fluentd service status: check with sudo systemctl status td-agent"
     fi
     
     echo ""
+    print_info "Checking port 24224..."
     
-    # Check port
-    print_info "Checking listening ports..."
-    sleep 1
-    
-    if netstat -tulpn 2>/dev/null | grep -q 24224 || ss -tulpn 2>/dev/null | grep -q 24224; then
-        print_success "Fluentd is listening on port 24224"
+    if ss -tulpn 2>/dev/null | grep -q 24224; then
+        print_success "Fluentd listening on port 24224"
+    elif netstat -tulpn 2>/dev/null | grep -q 24224; then
+        print_success "Fluentd listening on port 24224"
     else
-        print_warning "Fluentd may not be listening on port 24224 yet"
+        print_warning "Port 24224 not yet listening (may still be starting)"
     fi
     
     echo ""
@@ -428,16 +386,10 @@ check_status_macos() {
     print_divider
     echo ""
     
-    print_info "Checking Fluent Bit status..."
-    sleep 1
-    
-    if brew services list | grep -q "fluent-bit.*started"; then
-        print_success "Fluent Bit service is RUNNING"
-        echo ""
-        echo -e "${CYAN}Service Details:${NC}"
-        brew services list | grep fluent-bit | sed 's/^/  /'
+    if brew services list 2>/dev/null | grep -q "fluent-bit.*started"; then
+        print_success "Fluent Bit service is RUNNING ✓"
     else
-        print_warning "Fluent Bit status unknown or not running"
+        print_warning "Fluent Bit status: check with brew services list"
     fi
     
     echo ""
@@ -449,15 +401,12 @@ check_version() {
     print_divider
     echo ""
     
-    print_info "Checking installed version..."
-    sleep 1
-    
     if [[ "$OS" == "macos" ]]; then
-        echo -e "${CYAN}Fluent Bit Version:${NC}"
-        fluent-bit --version 2>/dev/null | sed 's/^/  /' || echo "  Could not retrieve version"
+        print_info "Fluent Bit version:"
+        fluent-bit --version 2>/dev/null || echo "  Could not retrieve version"
     else
-        echo -e "${CYAN}Fluentd Version:${NC}"
-        td-agent --version 2>/dev/null | sed 's/^/  /' || echo "  Could not retrieve version"
+        print_info "Fluentd version:"
+        td-agent --version 2>/dev/null || echo "  Could not retrieve version"
     fi
     
     echo ""
@@ -469,18 +418,18 @@ check_version() {
 
 show_config_info() {
     print_divider
-    print_box "Configuration Paths"
+    print_box "Configuration & Next Steps"
     print_divider
     echo ""
     
     if [[ "$OS" == "macos" ]]; then
-        echo -e "${CYAN}${BOLD}Configuration File:${NC}"
+        echo -e "${CYAN}${BOLD}Config File:${NC}"
         echo "  $(brew --prefix)/etc/fluent-bit/fluent-bit.conf"
         echo ""
         echo -e "${CYAN}${BOLD}Log File:${NC}"
         echo "  $(brew --prefix)/var/log/fluent-bit.log"
     else
-        echo -e "${CYAN}${BOLD}Configuration File:${NC}"
+        echo -e "${CYAN}${BOLD}Config File:${NC}"
         echo "  /etc/td-agent/td-agent.conf"
         echo ""
         echo -e "${CYAN}${BOLD}Log File:${NC}"
@@ -489,10 +438,10 @@ show_config_info() {
     
     echo ""
     echo -e "${CYAN}${BOLD}Useful Commands:${NC}"
-    echo "  ${GRAY}View logs${NC}:           tail -f /var/log/td-agent/td-agent.log"
-    echo "  ${GRAY}Restart service${NC}:     sudo systemctl restart td-agent"
-    echo "  ${GRAY}Stop service${NC}:        sudo systemctl stop td-agent"
-    echo "  ${GRAY}Edit config${NC}:         sudo nano /etc/td-agent/td-agent.conf"
+    echo "  View logs:        tail -f /var/log/td-agent/td-agent.log"
+    echo "  Restart service:  sudo systemctl restart td-agent"
+    echo "  Stop service:     sudo systemctl stop td-agent"
+    echo "  Edit config:      sudo nano /etc/td-agent/td-agent.conf"
     echo ""
 }
 
@@ -505,7 +454,7 @@ check_privileges() {
         print_header
         print_error "This script requires elevated privileges (sudo)"
         echo ""
-        print_info "Please run: ${BOLD}sudo $0${NC}"
+        print_info "Run: ${BOLD}sudo $0${NC}"
         echo ""
         exit 1
     fi
@@ -514,16 +463,13 @@ check_privileges() {
 main() {
     print_header
     
-    # Get OS info
-    OS_INFO=$(detect_os)
-    OS=$(echo $OS_INFO | cut -d'|' -f1)
-    VERSION=$(echo $OS_INFO | cut -d'|' -f2)
-    OS_NAME=$(echo $OS_INFO | cut -d'|' -f3)
+    print_info "Detecting operating system..."
+    sleep 1
+    detect_os
     
     echo ""
-    print_info "Operating System: ${BOLD}${OS_NAME}${NC}"
+    print_success "Detected: ${BOLD}${OS_NAME}${NC}"
     sleep 2
-    
     echo ""
     
     # Install based on OS
@@ -552,45 +498,30 @@ main() {
         *)
             print_error "Unsupported OS: $OS"
             echo ""
-            echo -e "${CYAN}Supported operating systems:${NC}"
-            echo "  • Ubuntu / Debian"
-            echo "  • CentOS / RHEL / Fedora"
-            echo "  • Alpine Linux"
-            echo "  • macOS"
+            echo -e "${CYAN}Supported:${NC} Ubuntu, Debian, CentOS, RHEL, Alpine, macOS"
             echo ""
             exit 1
             ;;
     esac
     
-    # Show version info
     check_version
-    
-    # Show configuration info
     show_config_info
     
     # Final summary
     echo ""
     print_divider
-    echo -e "${GREEN}${BOLD}${ROCKET} INSTALLATION COMPLETED SUCCESSFULLY! ${ROCKET}${NC}"
+    echo -e "${GREEN}${BOLD}${ROCKET} INSTALLATION COMPLETED! ${ROCKET}${NC}"
     print_divider
     echo ""
     echo -e "${MAGENTA}${BOLD}Next Steps:${NC}"
     echo ""
-    echo -e "  1️⃣  ${CYAN}Edit configuration${NC}"
     if [[ "$OS" == "macos" ]]; then
-        echo "     nano $(brew --prefix)/etc/fluent-bit/fluent-bit.conf"
+        echo "  1️⃣  nano $(brew --prefix)/etc/fluent-bit/fluent-bit.conf"
     else
-        echo "     sudo nano /etc/td-agent/td-agent.conf"
+        echo "  1️⃣  sudo nano /etc/td-agent/td-agent.conf"
     fi
-    echo ""
-    echo -e "  2️⃣  ${CYAN}Restart service${NC}"
-    echo "     sudo systemctl restart td-agent"
-    echo ""
-    echo -e "  3️⃣  ${CYAN}Monitor logs${NC}"
-    echo "     tail -f /var/log/td-agent/td-agent.log"
-    echo ""
-    echo -e "  4️⃣  ${CYAN}Learn more${NC}"
-    echo "     https://docs.fluentd.org/"
+    echo "  2️⃣  sudo systemctl restart td-agent"
+    echo "  3️⃣  tail -f /var/log/td-agent/td-agent.log"
     echo ""
     print_divider
     echo ""
